@@ -7,32 +7,24 @@ use App\Models\User;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
-
+use App\Traits\ApiResponseTrait;
 
 class TwoFactorService
 {
+    use ApiResponseTrait;
 
-    // Generates a secret key for 2FA
     public function generateSecretKey()
     {
         return random_int(100000, 999999);
     }
 
-    // Verifies the provided one-time password against the secret key
     public function verifyKey($user, $oneTimePassword)
     {
-        // $otp = TOTP::create($user->two_factor_secret);
-        // \Log::info('Generated OTP: ' . $otp->now()); // Log the generated OTP
-        // $result = $otp->verify($oneTimePassword);
-        // \Log::info('OTP Verification Result: ' . ($result ? 'Success' : 'Failure')); // Log the verification result
-        // return $result;
-        // // return $otp->verify($oneTimePassword);
         try {
             $otp = TOTP::create($user->two_factor_secret);
-            \Log::info('Generated OTP: ' . $otp->now()); // Log the generated OTP
+            \Log::info('Generated OTP: ' . $otp->now());
             $result = $otp->verify($oneTimePassword);
-            \Log::info('OTP Verification Result: ' . ($result ? 'Success' : 'Failure')); // Log the verification result
+            \Log::info('OTP Verification Result: ' . ($result ? 'Success' : 'Failure'));
             return $result;
         } catch (\Exception $e) {
             \Log::error('Error during OTP verification: ' . $e->getMessage());
@@ -40,32 +32,39 @@ class TwoFactorService
         }
     }
 
-    // Enables 2FA for the user
     public function enableTwoFactorAuth($user)
     {
-
-        $secret = $this->generateSecretKey();
-        $user->two_factor_secret = $secret;
-        $user->two_factor_enabled = true;
-        $user->save();
-        \Log::info('2FA Secret Key Generated: ' . $secret); // Log the secret key
-        $email = $user->email;
-        Mail::send('emails.2FA', ['secret' => $secret], function($message) use ($email) {
-                    $message->to($email);
-                    $message->subject('Two-Factor Authentication Code');
-                });
-        return $secret;
+        try {
+            $secret = $this->generateSecretKey();
+            $user->two_factor_secret = $secret;
+            $user->two_factor_enabled = true;
+            $user->save();
+            \Log::info('2FA Secret Key Generated: ' . $secret);
+            $email = $user->email;
+            Mail::send('emails.2FA', ['secret' => $secret], function($message) use ($email) {
+                $message->to($email);
+                $message->subject('Two-Factor Authentication Code');
+            });
+            return $this->unifiedResponse(true, '2FA enabled successfully.', ['secret' => $secret], [], 200); # [MODIFIED] - Return unifiedResponse
+        } catch (\Exception $e) {
+            \Log::error('Error enabling 2FA: ' . $e->getMessage());
+            return $this->unifiedResponse(false, 'Failed to enable 2FA.', [], ['error' => $e->getMessage()], 500); # [MODIFIED] - Return unifiedResponse
+        }
     }
 
-    // Disables 2FA for the user
     public function disableTwoFactorAuth($user)
     {
-        $user->two_factor_secret = null;
-        $user->two_factor_enabled = false;
-        $user->save();
+        try {
+            $user->two_factor_secret = null;
+            $user->two_factor_enabled = false;
+            $user->save();
+            return $this->unifiedResponse(true, '2FA disabled successfully.', [], [], 200); # [MODIFIED] - Return unifiedResponse
+        } catch (\Exception $e) {
+            \Log::error('Error disabling 2FA: ' . $e->getMessage());
+            return $this->unifiedResponse(false, 'Failed to disable 2FA.', [], ['error' => $e->getMessage()], 500); # [MODIFIED] - Return unifiedResponse
+        }
     }
 
-    // Verifies the 2FA code and generates a token if successful
     public function verify2FA($request)
     {
         $validator = Validator::make($request->all(), [
@@ -74,46 +73,20 @@ class TwoFactorService
         ]);
 
         if ($validator->fails()) {
-            throw new ValidationException($validator);
+            return $this->unifiedResponse(false, 'Validation failed.', [], $validator->errors()->toArray(), 422);
         }
 
         $user = User::find($request->user_id);
         if (!$user) {
-            return[
-                'message' => 'User not found.',
-                'status'=>404
-            ];
+            return $this->unifiedResponse(false, 'User not found.', [], [], 404);
         }
 
         $valid = $this->verifyKey($user, $request->one_time_password);
         if ($valid) {
             $token = $user->createToken('authToken')->plainTextToken;
-            return [
-                'message' => '2FA verification successful.',
-                'token' => $token,
-                'status'=>200
-            ];
+            return $this->unifiedResponse(true, '2FA verification successful.', ['token' => $token], [], 200);
         }
 
-        return [
-            'message' => 'Invalid 2FA code.',
-            'status'=>401];
+        return $this->unifiedResponse(false, 'Invalid 2FA code.', [], [], 401);
     }
-
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

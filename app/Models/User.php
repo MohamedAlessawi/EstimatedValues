@@ -51,59 +51,8 @@ class User extends Authenticatable
         'email_verified_at' => 'datetime',
     ];
 
-
-        public function userRoles()
+    public function predictions()
     {
-        return $this->hasMany(UserRole::class, 'user_id');
-    }
-
-    public function appointments()
-    {
-        return $this->hasMany(Appointment::class, 'booked_by');
-    }
-
-    public function medicalFiles()
-    {
-        return $this->hasMany(MedicalFile::class, 'user_id');
-    }
-
-    public function ratings()
-    {
-        return $this->hasMany(Rating::class, 'user_id');
-    }
-
-    public function notifications()
-    {
-        return $this->hasMany(Notification::class, 'user_id');
-    }
-
-    public function licenses()
-    {
-        return $this->hasMany(License::class, 'user_id');
-    }
-
-    public function doctors()
-    {
-        return $this->hasOne(Doctor::class, 'user_id');
-    }
-
-    public function adminCenters()
-    {
-        return $this->hasMany(AdminCenter::class, 'user_id');
-    }
-
-    public function secretaries()
-    {
-        return $this->hasMany(Secretary::class, 'user_id');
-    }
-
-    public function userCenters()
-    {
-        return $this->hasMany(UserCenter::class, 'user_id');
-    }
-
-    public function reports()
-    {
-        return $this->hasMany(Report::class, 'generated_by');
+        return $this->hasMany(Prediction::class);
     }
 }

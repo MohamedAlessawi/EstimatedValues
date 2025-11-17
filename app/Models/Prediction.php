@@ -11,8 +11,15 @@ class Prediction extends Model
     protected $fillable = [
         'user_id',
         'title',
+        'description',
         'prediction_type',
-        'future_steps'
+        'future_steps',
+        'start_date',
+    ];
+
+    protected $casts = [
+        'future_steps' => 'integer',
+        'start_date'   => 'date',
     ];
 
     public function user() {

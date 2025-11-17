@@ -11,6 +11,8 @@ return new class extends Migration {
             $table->foreignId('prediction_id')->constrained()->onDelete('cascade');
             $table->integer('index');
             $table->float('predicted_value');
+            $table->date('period_date');
+
             $table->timestamps();
         });
     }

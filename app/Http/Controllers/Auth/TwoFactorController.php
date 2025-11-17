@@ -1,7 +1,9 @@
 <?php
+
 namespace App\Http\Controllers\Auth;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use App\Services\Auth\TwoFactorService;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
@@ -15,44 +17,30 @@ class TwoFactorController extends Controller
         $this->twoFactorService = $twoFactorService;
     }
 
-    // Enables 2FA for the authenticated user
     public function enable(Request $request)
     {
         $user = Auth::user();
-        $secret = $this->twoFactorService->enableTwoFactorAuth($user);
-        return response()->json(['message' => '2FA enabled successfully.', 'secret' => $secret]);
+        $result = $this->twoFactorService->enableTwoFactorAuth($user);
+        return $result; # [MODIFIED] - Return service result directly
     }
 
-    // Disables 2FA for the authenticated user
     public function disable(Request $request)
     {
         $user = Auth::user();
-        $this->twoFactorService->disableTwoFactorAuth($user);
-        return response()->json(['message' => '2FA disabled successfully.']);
+        $result = $this->twoFactorService->disableTwoFactorAuth($user);
+        return $result; # [MODIFIED] - Return service result directly
     }
-
 
     public function verify(Request $request)
     {
-        \Log::info('Received 2FA verification request', $request->all());
+        Log::info('Received 2FA verification request', $request->all());
 
         try {
             $result = $this->twoFactorService->verify2FA($request);
-
-            \Log::info('Controller Response:', $result);
-
-            if (isset($result['status']) && $result['status'] === 401) {
-                \Log::error('2FA verification failed for user: ' . $request->user_id);
-                return response()->json(['message' => $result['message']], 401);
-            }
-
-            \Log::info('2FA verification successful for user: ' . $request->user_id);
-            return response()->json(['message' => $result['message'], 'token' => $result['token']], 200);
+            return $result; # [MODIFIED] - Return service result directly
         } catch (\Exception $e) {
-            \Log::error('Error during 2FA verification: ' . $e->getMessage());
-            return response()->json(['message' => 'An error occurred during 2FA verification.'], 500);
+            Log::error('Error during 2FA verification: ' . $e->getMessage());
+            return $this->unifiedResponse(false, 'An error occurred during 2FA verification.', [], ['error' => $e->getMessage()], 500);
         }
     }
-
 }
-

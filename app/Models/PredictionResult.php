@@ -12,7 +12,13 @@ class PredictionResult extends Model
     protected $fillable = [
         'prediction_id',
         'index',
-        'predicted_value'
+        'predicted_value',
+        'period_date',
+    ];
+
+    protected $casts = [
+        'predicted_value' => 'float',
+        'period_date'     => 'date',
     ];
 
     public function prediction() {

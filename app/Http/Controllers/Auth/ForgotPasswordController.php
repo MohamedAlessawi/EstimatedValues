@@ -9,18 +9,15 @@ use App\Services\Auth\ForgotPasswordService;
 use App\Services\Auth\ResetPasswordService;
 use Illuminate\Support\Facades\Validator;
 
-
 class ForgotPasswordController extends Controller
 {
     protected $forgotPasswordService;
     protected $resetPasswordService;
 
-
     public function __construct(ForgotPasswordService $forgotPasswordService, ResetPasswordService $resetPasswordService)
     {
         $this->forgotPasswordService = $forgotPasswordService;
         $this->resetPasswordService = $resetPasswordService;
-
     }
 
     public function sendResetCode(Request $request)
@@ -30,25 +27,21 @@ class ForgotPasswordController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['errors' => $validator->errors()], 422);
+            return $this->unifiedResponse(false, 'Validation failed.', [], $validator->errors()->toArray(), 422);
         }
 
-        $response = $this->forgotPasswordService->sendResetCode($request->email);
-
-        return response()->json($response, 200);
+        $result = $this->forgotPasswordService->sendResetCode($request->email);
+        return $result;
     }
-
-
 
     public function reset(ResetPasswordRequest $request)
     {
-        $response = $this->resetPasswordService->resetPassword(
+        $result = $this->resetPasswordService->resetPassword(
             $request->email,
             $request->code,
             $request->password
         );
-
-        return response()->json(['message' => $response['message']], $response['status']);
+        return $result;
     }
-
 }
+
