@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Models\User;
 use App\Traits\ApiResponseTrait;
-use App\Traits\FileUploadTrait; // لو بدك تستخدمي الترايت تبعك
+use App\Traits\FileUploadTrait; 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
@@ -13,11 +13,9 @@ use Illuminate\Support\Facades\Validator;
 class UserService
 {
     use ApiResponseTrait;
-    use FileUploadTrait; // نستخدم الترايت تبع رفع الملفات
+    use FileUploadTrait;
 
-    /**
-     * تجهيز بيانات اليوزر مع رابط الصورة الكامل
-     */
+
     protected function transformUser(User $user): array
     {
         // $photoPath = $user->profile_photo;

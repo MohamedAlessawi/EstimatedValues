@@ -51,6 +51,9 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::middleware('auth:sanctum')->group(function() {
     Route::post('/predict', [PredictionController::class, 'store']);
     Route::get('/predict/history', [PredictionController::class, 'history']);
+    Route::get('/predict/history/{id}', [PredictionController::class, 'show']);
+    Route::put('/predict/history/{id}', [PredictionController::class, 'update']);
+    Route::delete('/predict/history/{id}', [PredictionController::class, 'destroy']);
 
     Route::get('/user', [UserController::class, 'show']);
     Route::put('/user', [UserController::class, 'update']);

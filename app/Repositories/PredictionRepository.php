@@ -17,4 +17,11 @@ class PredictionRepository
             ->latest()
             ->get();
     }
+
+    public function getUserPredictionsSummary($userId)
+    {
+        return Prediction::where('user_id', $userId)
+            ->latest()
+            ->get(['id', 'title', 'description', 'created_at']);
+    }
 }
