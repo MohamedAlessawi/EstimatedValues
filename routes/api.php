@@ -7,6 +7,7 @@ use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\ForgotPasswordController;
 use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\PredictionController;
+use App\Http\Controllers\UserController;
 
 
 
@@ -50,4 +51,9 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::middleware('auth:sanctum')->group(function() {
     Route::post('/predict', [PredictionController::class, 'store']);
     Route::get('/predict/history', [PredictionController::class, 'history']);
+
+    Route::get('/user', [UserController::class, 'show']);
+    Route::put('/user', [UserController::class, 'update']);
+    Route::post('/user/photo', [UserController::class, 'updatePhoto']);
+    Route::delete('/user/photo', [UserController::class, 'deletePhoto']);
 });
