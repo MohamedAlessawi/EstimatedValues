@@ -9,9 +9,9 @@ return new class extends Migration {
         Schema::create('predictions', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
-            $table->string('title'); // مثال: "تنبؤ معدل أداء طالب"
+            $table->string('title');
             $table->text('description')->nullable();
-            $table->string('prediction_type')->nullable(); // مثل "student_performance"
+            $table->string('prediction_type')->nullable();
             $table->integer('future_steps')->default(3);
             $table->date('start_date')->nullable();
             $table->timestamps();

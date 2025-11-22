@@ -21,6 +21,29 @@ class PredictionService
         $this->repo = $repo;
     }
 
+    protected array $titleRules = [
+        'profits' => [
+            'integer'        => false,
+            'min'            => null,
+            'max'            => null,
+            'allow_negative' => true,
+        ],
+
+        'student_grade' => [
+            'integer'        => false,
+            'min'            => 0,
+            'max'            => 100,
+            'allow_negative' => false,
+        ],
+
+        'customers_count' => [
+            'integer'        => true,
+            'min'            => 1,
+            'max'            => null,
+            'allow_negative' => false,
+        ],
+    ];
+
     public function createPrediction(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -29,7 +52,7 @@ class PredictionService
             'prediction_type' => 'required|in:weekly,monthly',
             'values'          => 'required|array|min:2',
             'values.*.value'       => 'required|numeric',
-            'values.*.period_date' => 'required|date',
+            'values.*.period_date' => 'required|date|before_or_equal:today',
             'future_steps'    => 'required|integer|min:1|max:12',
         ]);
 
@@ -49,6 +72,10 @@ class PredictionService
             ->sortBy('period_date')
             ->values()
             ->all();
+
+        if ($errorResponse = $this->validateValuesByTitle($data['title'], $points)) {
+            return $errorResponse;
+        }
 
         $series = array_map(fn ($item) => $item['value'], $points);
 
@@ -102,6 +129,49 @@ class PredictionService
         $predictions = $this->repo->getUserPredictions($userId);
 
         return $this->unifiedResponse(true, 'Prediction history retrieved', $predictions);
+    }
+
+     protected function validateValuesByTitle(string $title, array $points)
+    {
+        // لو الـ title مو موجود ضمن القواعد، ما نطبق شي زيادة
+        if (!array_key_exists($title, $this->titleRules)) {
+            return null;
+        }
+
+        $rule   = $this->titleRules[$title];
+        $errors = [];
+
+        foreach ($points as $index => $item) {
+            $value = $item['value'];
+
+            if (!$rule['allow_negative'] && $value < 0) {
+                $errors["values.$index.value"][] = 'القيمة لا يُسمح أن تكون سالبة لهذا النوع.';
+            }
+
+            if ($rule['min'] !== null && $value < $rule['min']) {
+                $errors["values.$index.value"][] = 'القيمة يجب أن تكون أكبر أو تساوي ' . $rule['min'] . '.';
+            }
+
+            if ($rule['max'] !== null && $value > $rule['max']) {
+                $errors["values.$index.value"][] = 'القيمة يجب أن تكون أصغر أو تساوي ' . $rule['max'] . '.';
+            }
+
+            if ($rule['integer'] === true && floor($value) != $value) {
+                $errors["values.$index.value"][] = 'القيمة يجب أن تكون عدداً صحيحاً لهذا النوع.';
+            }
+        }
+
+        if (!empty($errors)) {
+            return $this->unifiedResponse(
+                false,
+                'Value validation error for title: ' . $title,
+                [],
+                $errors,
+                422
+            );
+        }
+
+        return null;
     }
 
 
@@ -271,7 +341,7 @@ class PredictionService
         return $avg;
     }
 
-    
+
     protected function calculateNextWithTrend(array $window): float
     {
         if (count($window) < 2) {
