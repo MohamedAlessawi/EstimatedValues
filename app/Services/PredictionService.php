@@ -2,6 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\College;
+use App\Models\CollegeYearStat;
+use App\Models\CollegeMonthExpense;
 use App\Models\Prediction;
 use App\Models\PredictionValue;
 use App\Models\PredictionResult;
@@ -17,32 +20,7 @@ class PredictionService
 
     protected $repo;
 
-    // Rules depending on "title" (logical prediction type)
-    protected array $titleRules = [
-        // Profits: any numeric (positive or negative)
-        'profits' => [
-            'integer'        => false,
-            'min'            => null,
-            'max'            => null,
-            'allow_negative' => true,
-        ],
-
-        // Student grade: 0 – 100
-        'student_grade' => [
-            'integer'        => false,
-            'min'            => 0,
-            'max'            => 100,
-            'allow_negative' => false,
-        ],
-
-        // Customers count: integer, >= 1
-        'customers_count' => [
-            'integer'        => true,
-            'min'            => 1,
-            'max'            => null,
-            'allow_negative' => false,
-        ],
-    ];
+    protected int $minPoints = 3;
 
     public function __construct(PredictionRepository $repo)
     {
@@ -50,23 +28,21 @@ class PredictionService
     }
 
     /**
-     * Create new prediction
+     * Create new prediction based on stored stats (not raw user values)
      */
     public function createPrediction(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            // Logical prediction type (profits / student_grade / customers_count / ...)
-            'title'           => 'required|string',
-            'description'     => 'nullable|string',
+            'title'        => 'nullable|string',
+            'description'  => 'nullable|string',
 
-            // Time dimension: weekly / monthly
-            'prediction_type' => 'required|in:weekly,monthly',
+            'scope_type'   => 'required|in:college,university',
+            'scope_id'     => 'required_if:scope_type,college|nullable|exists:colleges,id',
 
-            'values'               => 'required|array|min:2',
-            'values.*.value'       => 'required|numeric',
-            'values.*.period_date' => 'required|date|before_or_equal:today',
+            'metric'       => 'required|in:revenue,expenses,profit,students',
+            'period_type'  => 'required|in:yearly,monthly',
 
-            'future_steps'    => 'required|integer|min:1|max:12',
+            'future_steps' => 'required|integer|min:1|max:20',
         ]);
 
         if ($validator->fails()) {
@@ -81,65 +57,97 @@ class PredictionService
 
         $data = $validator->validated();
 
-        // Sort values by date (oldest -> newest)
-        $points = collect($data['values'])
-            ->sortBy('period_date')
-            ->values()
-            ->all();
-
-        // Extra validation based on title rules
-        if ($errorResponse = $this->validateValuesByTitle($data['title'], $points)) {
-            return $errorResponse;
+        // Validate allowed combinations
+        if ($data['period_type'] === 'yearly' && in_array($data['metric'], ['expenses', 'profit'])) {
+            return $this->unifiedResponse(
+                false,
+                'Invalid combination: expenses/profit are only supported with monthly period_type.',
+                [],
+                [],
+                422
+            );
         }
 
-        // Only numeric series for prediction algorithm
-        $series = array_map(fn ($item) => $item['value'], $points);
+        if ($data['period_type'] === 'monthly' && $data['metric'] === 'students') {
+            return $this->unifiedResponse(
+                false,
+                'Invalid combination: students metric is only supported with yearly period_type.',
+                [],
+                [],
+                422
+            );
+        }
 
-        $periodDates = array_map(fn ($item) => $item['period_date'], $points);
-        $startDate   = min($periodDates);
-        $lastDate    = max($periodDates);
+        // Build historical series from stats
+        $series = $this->buildSeries(
+            $data['scope_type'],
+            $data['scope_type'] === 'college' ? $data['scope_id'] : null,
+            $data['metric'],
+            $data['period_type']
+        );
 
-        // 1) Create prediction row
+        if (count($series['values']) < $this->minPoints) {
+            return $this->unifiedResponse(
+                false,
+                'At least ' . $this->minPoints . ' historical data points are required for prediction.',
+                [],
+                [],
+                422
+            );
+        }
+
+        $values     = $series['values'];     // numeric array
+        $periods    = $series['periods'];    // Carbon[]
+        $startDate  = $periods[0]->toDateString();
+        $lastPeriod = end($periods);
+
+        // 1) Create prediction record
         $prediction = $this->repo->create([
-            'user_id'         => $request->user()->id,
-            'title'           => $data['title'],
-            'description'     => $data['description'] ?? null,
-            'prediction_type' => $data['prediction_type'], // weekly / monthly
-            'future_steps'    => $data['future_steps'],
-            'start_date'      => $startDate,
+            'user_id'      => $request->user()->id,
+            'scope_type'   => $data['scope_type'],
+            'scope_id'     => $data['scope_type'] === 'college' ? $data['scope_id'] : null,
+            'title'        => $data['title'] ?? ($data['metric'] . ' ' . $data['period_type']),
+            'description'  => $data['description'] ?? null,
+            'metric'       => $data['metric'],
+            'period_type'  => $data['period_type'],
+            'future_steps' => $data['future_steps'],
+            'start_date'   => $startDate,
         ]);
 
-        // 2) Store original values
-        $this->storeOriginalValues(
-            $prediction->id,
-            $points
-        );
+        // 2) Store original values snapshot
+        $this->storeOriginalValuesFromSeries($prediction->id, $values, $periods);
 
-        // 3) Predict future values
-        $predictedValues = $this->predictTimeSeries(
-            $series,
-            $data['future_steps']
-        );
+        // 3) Predict future values (raw)
+        $predictedValues = $this->predictTimeSeries($values, $data['future_steps']);
 
-        // 4) Store predicted results
+        //  apply capacity bounds to each predicted value
+        $boundedPredictedValues = [];
+        foreach ($predictedValues as $v) {
+            $boundedPredictedValues[] = $this->applyBounds(
+                $data['metric'],
+                $data['scope_type'],
+                $data['scope_type'] === 'college' ? $data['scope_id'] : null,
+                (float) $v
+            );
+        }
+
+        // 4) Store prediction results (using bounded values)
         $results = $this->storePredictedResults(
             $prediction->id,
-            $predictedValues,
-            $data['prediction_type'],
-            $lastDate,
-            count($series)
+            $boundedPredictedValues,
+            $data['period_type'],
+            $lastPeriod,
+            count($values)
         );
 
-        // 5) Fetch original values from DB (sorted)
         $originalValues = PredictionValue::where('prediction_id', $prediction->id)
             ->orderBy('index')
             ->get();
 
-        // 6) Build labeled results for UI
         $labeledResults = $this->attachTimeLabels(
-            $predictedValues,
-            $data['prediction_type'],
-            $lastDate
+            $boundedPredictedValues,
+            $data['period_type'],
+            $lastPeriod
         );
 
         return $this->unifiedResponse(true, 'Prediction created successfully', [
@@ -151,7 +159,7 @@ class PredictionService
     }
 
     /**
-     * History: summary only (id, title, description, created_at)
+     * Get history summary
      */
     public function history(int $userId)
     {
@@ -161,7 +169,7 @@ class PredictionService
     }
 
     /**
-     * Show single prediction by id (same style as createPrediction response)
+     * Show single prediction with details
      */
     public function showPrediction(Request $request, int $id)
     {
@@ -181,32 +189,29 @@ class PredictionService
             );
         }
 
-        // Original values
         $originalValues = PredictionValue::where('prediction_id', $prediction->id)
             ->orderBy('period_date')
             ->orderBy('index')
             ->get();
 
-        // Stored results
         $results = PredictionResult::where('prediction_id', $prediction->id)
             ->orderBy('index')
             ->get();
 
         $predictedValues = $results->pluck('predicted_value')->toArray();
 
-        // Determine lastDate from original values
         if ($originalValues->count() > 0) {
-            $lastDateString = $originalValues->max('period_date')->toDateString();
+            $lastDate = Carbon::parse($originalValues->max('period_date'));
         } elseif ($prediction->start_date) {
-            $lastDateString = $prediction->start_date->toDateString();
+            $lastDate = Carbon::parse($prediction->start_date);
         } else {
-            $lastDateString = now()->toDateString();
+            $lastDate = now();
         }
 
         $labeledResults = $this->attachTimeLabels(
             $predictedValues,
-            $prediction->prediction_type,
-            $lastDateString
+            $prediction->period_type,
+            $lastDate
         );
 
         return $this->unifiedResponse(true, 'Prediction retrieved successfully', [
@@ -218,11 +223,11 @@ class PredictionService
     }
 
     /**
-     * Update prediction (meta + values) and recompute results when needed
+     * Update prediction meta and recompute using current stats
      */
     public function updatePrediction(Request $request, int $id)
     {
-        $userId     = $request->user()->id;
+        $userId = $request->user()->id;
 
         $prediction = Prediction::where('user_id', $userId)
             ->where('id', $id)
@@ -239,15 +244,9 @@ class PredictionService
         }
 
         $validator = Validator::make($request->all(), [
-            'title'           => 'sometimes|string',
-            'description'     => 'sometimes|string',
-            'prediction_type' => 'sometimes|in:weekly,monthly',
-
-            'values'               => 'sometimes|array|min:2',
-            'values.*.value'       => 'required_with:values|numeric',
-            'values.*.period_date' => 'required_with:values|date|before_or_equal:today',
-
-            'future_steps'    => 'sometimes|integer|min:1|max:12',
+            'title'        => 'sometimes|string',
+            'description'  => 'sometimes|string',
+            'future_steps' => 'sometimes|integer|min:1|max:20',
         ]);
 
         if ($validator->fails()) {
@@ -262,156 +261,79 @@ class PredictionService
 
         $data = $validator->validated();
 
-        $title          = $data['title']           ?? $prediction->title;
-        $predictionType = $data['prediction_type'] ?? $prediction->prediction_type;
-        $futureSteps    = $data['future_steps']    ?? $prediction->future_steps;
-
-        $prediction->title           = $title;
-        $prediction->prediction_type = $predictionType;
-        $prediction->future_steps    = $futureSteps;
+        if (array_key_exists('title', $data)) {
+            $prediction->title = $data['title'];
+        }
 
         if (array_key_exists('description', $data)) {
             $prediction->description = $data['description'];
         }
 
-        // Do we need to recalc?
-        $shouldRecalculate = isset($data['values'])
-            || isset($data['prediction_type'])
-            || isset($data['future_steps']);
-
-        if ($shouldRecalculate) {
-            // Build points (values + dates)
-            if (isset($data['values'])) {
-                // Using new values from request
-                $points = collect($data['values'])
-                    ->sortBy('period_date')
-                    ->values()
-                    ->all();
-            } else {
-                // Use existing values from DB
-                $existingValues = PredictionValue::where('prediction_id', $prediction->id)
-                    ->orderBy('period_date')
-                    ->get(['value', 'period_date']);
-
-                if ($existingValues->count() < 2) {
-                    // Cannot recompute with less than 2 values
-                    $prediction->save();
-
-                    $results = PredictionResult::where('prediction_id', $prediction->id)
-                        ->orderBy('index')
-                        ->get();
-
-                    $predictedValues = $results->pluck('predicted_value')->toArray();
-
-                    $originalValues = PredictionValue::where('prediction_id', $prediction->id)
-                        ->orderBy('period_date')
-                        ->orderBy('index')
-                        ->get();
-
-                    $lastDateString = $originalValues->count()
-                        ? $originalValues->max('period_date')->toDateString()
-                        : ($prediction->start_date
-                            ? $prediction->start_date->toDateString()
-                            : now()->toDateString());
-
-                    $labeledResults = $this->attachTimeLabels(
-                        $predictedValues,
-                        $prediction->prediction_type,
-                        $lastDateString
-                    );
-
-                    return $this->unifiedResponse(true, 'Prediction updated successfully', [
-                        'prediction'       => $prediction,
-                        'original_values'  => $originalValues,
-                        'raw_results'      => $results,
-                        'labeled_results'  => $labeledResults,
-                    ]);
-                }
-
-                $points = $existingValues
-                    ->map(fn ($row) => [
-                        'value'       => $row->value,
-                        'period_date' => $row->period_date->toDateString(),
-                    ])
-                    ->all();
-            }
-
-            // Validate values according to title rules
-            if ($errorResponse = $this->validateValuesByTitle($title, $points)) {
-                return $errorResponse;
-            }
-
-            $series = array_map(fn ($item) => $item['value'], $points);
-            $periodDates = array_map(fn ($item) => $item['period_date'], $points);
-            $startDate   = min($periodDates);
-            $lastDate    = max($periodDates);
-
-            $prediction->start_date = $startDate;
-
-            // If new values provided, reset values table
-            if (isset($data['values'])) {
-                PredictionValue::where('prediction_id', $prediction->id)->delete();
-                $this->storeOriginalValues($prediction->id, $points);
-            }
-
-            // Always recompute results when recalc is needed
-            PredictionResult::where('prediction_id', $prediction->id)->delete();
-
-            $predictedValues = $this->predictTimeSeries($series, $futureSteps);
-            $results = $this->storePredictedResults(
-                $prediction->id,
-                $predictedValues,
-                $predictionType,
-                $lastDate,
-                count($series)
-            );
-
-            $prediction->save();
-
-            $originalValues = PredictionValue::where('prediction_id', $prediction->id)
-                ->orderBy('index')
-                ->get();
-
-            $labeledResults = $this->attachTimeLabels(
-                $predictedValues,
-                $predictionType,
-                $lastDate
-            );
-
-            return $this->unifiedResponse(true, 'Prediction updated successfully', [
-                'prediction'       => $prediction,
-                'original_values'  => $originalValues,
-                'raw_results'      => $results,
-                'labeled_results'  => $labeledResults,
-            ]);
+        if (array_key_exists('future_steps', $data)) {
+            $prediction->future_steps = $data['future_steps'];
         }
 
-        // Only meta fields changed (title/description) => no recalculation
+        // Rebuild series from stats
+        $series = $this->buildSeries(
+            $prediction->scope_type,
+            $prediction->scope_type === 'college' ? $prediction->scope_id : null,
+            $prediction->metric,
+            $prediction->period_type
+        );
+
+        if (count($series['values']) <  $this->minPoints) {
+            return $this->unifiedResponse(
+                false,
+                'At least ' . $this->minPoints . ' historical data points are required to recompute the prediction.',
+                [],
+                [],
+                422
+            );
+        }
+
+        $values     = $series['values'];
+        $periods    = $series['periods'];
+        $startDate  = $periods[0]->toDateString();
+        $lastPeriod = end($periods);
+
+        $prediction->start_date = $startDate;
         $prediction->save();
 
-        $results = PredictionResult::where('prediction_id', $prediction->id)
-            ->orderBy('index')
-            ->get();
+        // Reset original snapshot
+        PredictionValue::where('prediction_id', $prediction->id)->delete();
+        $this->storeOriginalValuesFromSeries($prediction->id, $values, $periods);
 
-        $predictedValues = $results->pluck('predicted_value')->toArray();
+        // Reset and recompute results
+        PredictionResult::where('prediction_id', $prediction->id)->delete();
 
-        $originalValues = PredictionValue::where('prediction_id', $prediction->id)
-            ->orderBy('period_date')
-            ->orderBy('index')
-            ->get();
+        $predictedValues = $this->predictTimeSeries($values, $prediction->future_steps);
 
-        if ($originalValues->count() > 0) {
-            $lastDateString = $originalValues->max('period_date')->toDateString();
-        } elseif ($prediction->start_date) {
-            $lastDateString = $prediction->start_date->toDateString();
-        } else {
-            $lastDateString = now()->toDateString();
+        $boundedPredictedValues = [];
+        foreach ($predictedValues as $v) {
+            $boundedPredictedValues[] = $this->applyBounds(
+                $prediction->metric,
+                $prediction->scope_type,
+                $prediction->scope_type === 'college' ? $prediction->scope_id : null,
+                (float) $v
+            );
         }
 
+        $results = $this->storePredictedResults(
+            $prediction->id,
+            $boundedPredictedValues,
+            $prediction->period_type,
+            $lastPeriod,
+            count($values)
+        );
+
+        $originalValues = PredictionValue::where('prediction_id', $prediction->id)
+            ->orderBy('index')
+            ->get();
+
         $labeledResults = $this->attachTimeLabels(
-            $predictedValues,
-            $prediction->prediction_type,
-            $lastDateString
+            $boundedPredictedValues,
+            $prediction->period_type,
+            $lastPeriod
         );
 
         return $this->unifiedResponse(true, 'Prediction updated successfully', [
@@ -423,7 +345,7 @@ class PredictionService
     }
 
     /**
-     * Delete prediction completely
+     * Delete prediction
      */
     public function deletePrediction(Request $request, int $id)
     {
@@ -443,68 +365,204 @@ class PredictionService
             );
         }
 
-        // Cascade delete (children have onDelete('cascade'))
         $prediction->delete();
 
         return $this->unifiedResponse(true, 'Prediction deleted successfully');
     }
 
     /**
-     * Extra validation according to title rules
+     * Return available periods and values (for UI preview)
      */
-    protected function validateValuesByTitle(string $title, array $points)
+    public function getAvailablePeriods(Request $request)
     {
-        if (!array_key_exists($title, $this->titleRules)) {
-            return null;
-        }
+        $validator = Validator::make($request->all(), [
+            'scope_type'  => 'required|in:college,university',
+            'scope_id'    => 'required_if:scope_type,college|nullable|exists:colleges,id',
+            'metric'      => 'required|in:revenue,expenses,profit,students',
+            'period_type' => 'required|in:yearly,monthly',
+        ]);
 
-        $rule   = $this->titleRules[$title];
-        $errors = [];
-
-        foreach ($points as $index => $item) {
-            $value = $item['value'];
-
-            if (!$rule['allow_negative'] && $value < 0) {
-                $errors["values.$index.value"][] = 'Negative values are not allowed for this type.';
-            }
-
-            if ($rule['min'] !== null && $value < $rule['min']) {
-                $errors["values.$index.value"][] = 'Value must be greater than or equal to ' . $rule['min'] . '.';
-            }
-
-            if ($rule['max'] !== null && $value > $rule['max']) {
-                $errors["values.$index.value"][] = 'Value must be less than or equal to ' . $rule['max'] . '.';
-            }
-
-            if ($rule['integer'] === true && floor($value) != $value) {
-                $errors["values.$index.value"][] = 'Value must be an integer for this type.';
-            }
-        }
-
-        if (!empty($errors)) {
+        if ($validator->fails()) {
             return $this->unifiedResponse(
                 false,
-                'Value validation error for title: ' . $title,
+                'Validation error',
                 [],
-                $errors,
+                $validator->errors(),
                 422
             );
         }
 
-        return null;
+        $data = $validator->validated();
+
+        $series = $this->buildSeries(
+            $data['scope_type'],
+            $data['scope_type'] === 'college' ? $data['scope_id'] : null,
+            $data['metric'],
+            $data['period_type']
+        );
+
+        $periods = $series['periods'];
+        $values  = $series['values'];
+
+        $result = [];
+
+        foreach ($periods as $i => $date) {
+            $value = $values[$i] ?? null;
+
+            if ($data['period_type'] === 'yearly') {
+                $label = $date->format('Y');
+            } else {
+                $label = $date->format('Y-m');
+            }
+
+            $result[] = [
+                'label' => $label,
+                'date'  => $date->toDateString(),
+                'value' => $value,
+            ];
+        }
+
+        return $this->unifiedResponse(true, 'Available periods retrieved', [
+            'scope_type'  => $data['scope_type'],
+            'scope_id'    => $data['scope_type'] === 'college' ? $data['scope_id'] : null,
+            'metric'      => $data['metric'],
+            'period_type' => $data['period_type'],
+            'periods'     => $result,
+        ]);
     }
 
     /**
-     * Store original values
+     * Build time series (periods + values) from stats
+     *
+     * @return array{periods: Carbon[], values: float[]}
      */
-    protected function storeOriginalValues(int $predictionId, array $points): void
+    protected function buildSeries(string $scopeType, ?int $scopeId, string $metric, string $periodType): array
     {
-        foreach ($points as $index => $item) {
+        $periods = [];
+        $values  = [];
+
+        if ($scopeType === 'college') {
+            if ($periodType === 'yearly') {
+                $stats = CollegeYearStat::where('college_id', $scopeId)
+                    ->orderBy('year')
+                    ->get();
+
+                foreach ($stats as $row) {
+                    $periods[] = Carbon::create($row->year, 1, 1);
+                    if ($metric === 'revenue') {
+                        $values[] = (float)($row->annual_revenue ?? 0);
+                    } elseif ($metric === 'students') {
+                        $values[] = (float)($row->annual_students ?? 0);
+                    }
+                }
+            } else { // monthly – college level
+                // sum expenses per (year, month)
+                $expenses = CollegeMonthExpense::where('college_id', $scopeId)
+                    ->selectRaw('year, month, SUM(expenses) as total_expenses')
+                    ->groupBy('college_id', 'year', 'month')
+                    ->orderBy('year')
+                    ->orderBy('month')
+                    ->get();
+
+                $yearStats = CollegeYearStat::where('college_id', $scopeId)->get()
+                    ->groupBy('year');
+
+                foreach ($expenses as $row) {
+                    $periods[] = Carbon::create($row->year, $row->month, 1);
+
+                    if ($metric === 'expenses') {
+                        $values[] = (float)$row->total_expenses;
+                    } elseif ($metric === 'profit') {
+                        $yearRow = optional($yearStats->get($row->year))->first();
+                        $annualRevenue = $yearRow ? (float)($yearRow->annual_revenue ?? 0) : 0;
+                        $monthlyRevenue = $annualRevenue / 12.0;
+                        $profit = $monthlyRevenue - (float)$row->total_expenses;
+                        $values[] = $profit;
+                    }
+                }
+            }
+        } else { // university scope (aggregate all colleges)
+            if ($periodType === 'yearly') {
+                $stats = CollegeYearStat::selectRaw(
+                        'year, SUM(annual_revenue) as total_revenue, SUM(annual_students) as total_students'
+                    )
+                    ->groupBy('year')
+                    ->orderBy('year')
+                    ->get();
+
+                foreach ($stats as $row) {
+                    $periods[] = Carbon::create($row->year, 1, 1);
+                    if ($metric === 'revenue') {
+                        $values[] = (float)($row->total_revenue ?? 0);
+                    } elseif ($metric === 'students') {
+                        $values[] = (float)($row->total_students ?? 0);
+                    }
+                }
+            } else { // monthly – university level (aggregate)
+                $expenses = CollegeMonthExpense::orderBy('year')
+                    ->orderBy('month')
+                    ->get();
+
+                $yearStats = CollegeYearStat::all()
+                    ->groupBy('college_id')
+                    ->map(function ($rows) {
+                        return $rows->keyBy('year');
+                    });
+
+                $grouped = $expenses->groupBy(function ($row) {
+                    return $row->year . '-' . str_pad($row->month, 2, '0', STR_PAD_LEFT);
+                });
+
+                foreach ($grouped as $key => $rows) {
+                    [$year, $month] = explode('-', $key);
+                    $year = (int)$year;
+                    $month = (int)$month;
+
+                    $periods[] = Carbon::create($year, $month, 1);
+
+                    if ($metric === 'expenses') {
+                        $sum = $rows->sum('expenses');
+                        $values[] = (float)$sum;
+                    } elseif ($metric === 'profit') {
+                        $totalExpenses = 0.0;
+                        $totalMonthlyRevenue = 0.0;
+
+                        foreach ($rows as $row) {
+                            $totalExpenses += (float)$row->expenses;
+
+                            $statsForCollege = $yearStats->get($row->college_id);
+                            if ($statsForCollege && $statsForCollege->has($year)) {
+                                $annualRevenue = (float)($statsForCollege->get($year)->annual_revenue ?? 0);
+                                $totalMonthlyRevenue += $annualRevenue / 12.0;
+                            }
+                        }
+
+                        $values[] = $totalMonthlyRevenue - $totalExpenses;
+                    }
+                }
+            }
+        }
+
+        return [
+            'periods' => $periods,
+            'values'  => $values,
+        ];
+    }
+
+    /**
+     * Store original series
+     */
+    protected function storeOriginalValuesFromSeries(int $predictionId, array $values, array $periods): void
+    {
+        foreach ($values as $i => $val) {
+            /** @var Carbon $date */
+            $date = $periods[$i];
+
             PredictionValue::create([
                 'prediction_id' => $predictionId,
-                'index'         => $index + 1,
-                'value'         => $item['value'],
-                'period_date'   => $item['period_date'],
+                'index'         => $i + 1,
+                'value'         => $val,
+                'period_date'   => $date->toDateString(),
             ]);
         }
     }
@@ -515,27 +573,22 @@ class PredictionService
     protected function storePredictedResults(
         int $predictionId,
         array $predictedValues,
-        string $predictionType,
-        string $lastDateString,
+        string $periodType,
+        Carbon $lastPeriod,
         int $existingCount
     ): array {
-        $results  = [];
-        $lastDate = Carbon::parse($lastDateString);
+        $results = [];
 
         foreach ($predictedValues as $i => $value) {
             $step = $i + 1;
 
-            $periodDate = $this->getFutureDate(
-                $predictionType,
-                $lastDate,
-                $step
-            );
+            $futureDate = $this->getFutureDate($periodType, $lastPeriod, $step);
 
             $result = PredictionResult::create([
                 'prediction_id'   => $predictionId,
                 'index'           => $existingCount + $step,
                 'predicted_value' => $value,
-                'period_date'     => $periodDate,
+                'period_date'     => $futureDate->toDateString(),
             ]);
 
             $results[] = $result;
@@ -545,24 +598,23 @@ class PredictionService
     }
 
     /**
-     * Build labels for UI
+     * Build labels for predicted values
      */
     protected function attachTimeLabels(
         array $predictedValues,
-        string $predictionType,
-        string $lastDateString
+        string $periodType,
+        Carbon $lastPeriod
     ): array {
-        $labels   = [];
-        $lastDate = Carbon::parse($lastDateString);
+        $labels = [];
 
         foreach ($predictedValues as $i => $value) {
             $step = $i + 1;
-            $date = $this->getFutureDate($predictionType, $lastDate, $step);
+            $date = $this->getFutureDate($periodType, $lastPeriod, $step);
 
-            if ($predictionType === 'monthly') {
-                $label = $date->format('Y-m');
+            if ($periodType === 'yearly') {
+                $label = $date->format('Y');
             } else {
-                $label = 'Week ' . $date->weekOfYear . ' - ' . $date->year;
+                $label = $date->format('Y-m');
             }
 
             $labels[] = [
@@ -576,19 +628,19 @@ class PredictionService
     }
 
     /**
-     * Future date according to prediction_type
+     * Compute future date according to period type
      */
-    protected function getFutureDate(string $predictionType, Carbon $lastDate, int $step): Carbon
+    protected function getFutureDate(string $periodType, Carbon $lastPeriod, int $step): Carbon
     {
-        if ($predictionType === 'monthly') {
-            return $lastDate->copy()->addMonths($step);
+        if ($periodType === 'yearly') {
+            return $lastPeriod->copy()->addYears($step);
         }
 
-        return $lastDate->copy()->addWeeks($step);
+        return $lastPeriod->copy()->addMonths($step);
     }
 
     /**
-     * Multi-step prediction with moving window of last N values
+     * Multi-step prediction with moving window
      */
     protected function predictTimeSeries(array $values, int $steps): array
     {
@@ -621,7 +673,7 @@ class PredictionService
     }
 
     /**
-     * Detect if window is monotonic (trend) or fluctuating
+     * Detect trend vs fluctuation
      */
     protected function detectTrendType(array $values): string
     {
@@ -658,7 +710,7 @@ class PredictionService
     }
 
     /**
-     * Next value using moving average
+     * Next value using average
      */
     protected function calculateNextWithAverage(array $window): float
     {
@@ -690,5 +742,57 @@ class PredictionService
         $last  = end($window);
 
         return $last + $slope;
+    }
+
+    /**
+     * Apply logical bounds (min/max) to a predicted value
+     * based on metric and scope.
+     *
+     * - students: [0, max_students_capacity]
+     * - revenue:  [0, max_annual_revenue]
+     * - expenses: [0, +inf)
+     * - profit:   no hard bounds (can be negative)
+     */
+    protected function applyBounds(
+        string $metric,
+        string $scopeType,
+        ?int $scopeId,
+        float $value
+    ): float {
+        $min = null;
+        $max = null;
+
+        // Base minimums
+        if (in_array($metric, ['students', 'revenue', 'expenses'])) {
+            $min = 0.0;
+        }
+
+        // College-specific caps
+        if ($scopeType === 'college' && $scopeId) {
+            $college = College::find($scopeId);
+
+            if ($college) {
+                if ($metric === 'students' && !is_null($college->max_students_capacity)) {
+                    $max = (float) $college->max_students_capacity;
+                }
+
+                if ($metric === 'revenue' && !is_null($college->max_annual_revenue)) {
+                    $max = (float) $college->max_annual_revenue;
+                }
+            }
+        }
+
+        // Apply min/max if defined
+        $bounded = $value;
+
+        if (!is_null($min)) {
+            $bounded = max($bounded, $min);
+        }
+
+        if (!is_null($max)) {
+            $bounded = min($bounded, $max);
+        }
+
+        return $bounded;
     }
 }

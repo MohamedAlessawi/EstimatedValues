@@ -39,4 +39,9 @@ class PredictionController extends Controller
     {
         return $this->service->deletePrediction($request, $id);
     }
+
+    public function availablePeriods(Request $request)
+    {
+        return $this->service->getAvailablePeriods($request);
+    }
 }

@@ -22,6 +22,15 @@ class PredictionRepository
     {
         return Prediction::where('user_id', $userId)
             ->latest()
-            ->get(['id', 'title', 'description', 'created_at']);
+            ->get([
+                'id',
+                'title',
+                'description',
+                'metric',
+                'scope_type',
+                'scope_id',
+                'period_type',
+                'created_at',
+            ]);
     }
 }

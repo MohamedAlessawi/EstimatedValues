@@ -9,6 +9,9 @@ use App\Http\Controllers\Auth\TwoFactorController;
 use App\Http\Controllers\PredictionController;
 use App\Http\Controllers\UserController;
 
+use App\Http\Controllers\CollegeController;
+
+
 
 
 
@@ -49,11 +52,37 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 
 
 Route::middleware('auth:sanctum')->group(function() {
+    /* Colleges CRUD */
+    Route::post('/colleges', [CollegeController::class, 'store']);
+    Route::get('/colleges', [CollegeController::class, 'indexColleges']);
+    Route::get('/colleges/{id}', [CollegeController::class, 'showCollege']);
+    Route::put('/colleges/{id}', [CollegeController::class, 'updateCollege']);
+    Route::delete('/colleges/{id}', [CollegeController::class, 'deleteCollege']);
+
+    /* Year stats (revenues/students) */
+    Route::post('/colleges/{college}/year-stats', [CollegeController::class, 'storeYearStat']);
+    Route::get('/year-stats', [CollegeController::class, 'indexYearStats']); // global list with filters
+    Route::get('/year-stats/{id}', [CollegeController::class, 'showYearStat']);
+    Route::put('/year-stats/{id}', [CollegeController::class, 'updateYearStat']);
+    Route::delete('/year-stats/{id}', [CollegeController::class, 'deleteYearStat']);
+
+    /* Month expenses */
+    Route::post('/colleges/{college}/month-expenses', [CollegeController::class, 'storeMonthExpense']);
+    Route::get('/month-expenses', [CollegeController::class, 'indexMonthExpenses']); // global list with filters
+    Route::get('/month-expenses/{id}', [CollegeController::class, 'showMonthExpense']);
+    Route::put('/month-expenses/{id}', [CollegeController::class, 'updateMonthExpense']);
+    Route::delete('/month-expenses/{id}', [CollegeController::class, 'deleteMonthExpense']);
+
+    // Predictions
     Route::post('/predict', [PredictionController::class, 'store']);
     Route::get('/predict/history', [PredictionController::class, 'history']);
     Route::get('/predict/history/{id}', [PredictionController::class, 'show']);
     Route::put('/predict/history/{id}', [PredictionController::class, 'update']);
     Route::delete('/predict/history/{id}', [PredictionController::class, 'destroy']);
+
+    // Available periods for given config
+    Route::get('/predict/periods', [PredictionController::class, 'availablePeriods']);
+
 
     Route::get('/user', [UserController::class, 'show']);
     Route::put('/user', [UserController::class, 'update']);
