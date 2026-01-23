@@ -5,7 +5,7 @@
 /public/storage
 /storage/*.key
 /vendor
-.env
+# .env
 .env.backup
 .env.production
 Homestead.json
@@ -16,4 +16,28 @@ yarn-error.log
 /.fleet
 /.idea
 /.vscode
-/config/cors.php
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.yarn
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
