@@ -444,7 +444,6 @@ const Predictions = () => {
     const openDetailsModal = (prediction) => {
         setSelectedPrediction(prediction);
         setIsDetailsModalOpen(true);
-        // جلب تفاصيل التنبؤ
         fetchPredictionDetails(prediction.id);
     };
 
@@ -735,13 +734,13 @@ const Predictions = () => {
                                                     colorScheme="blue"
                                                     onClick={() => openDetailsModal(prediction)}
                                                 />
-                                                <IconButton
-                                                    aria-label="Edit prediction"
-                                                    icon={<EditIcon />}
-                                                    size="sm"
-                                                    colorScheme="yellow"
-                                                    onClick={() => openEditModal(prediction)}
-                                                />
+                                                {/*<IconButton*/}
+                                                {/*    aria-label="Edit prediction"*/}
+                                                {/*    icon={<EditIcon />}*/}
+                                                {/*    size="sm"*/}
+                                                {/*    colorScheme="yellow"*/}
+                                                {/*    onClick={() => openEditModal(prediction)}*/}
+                                                {/*/>*/}
                                                 <IconButton
                                                     aria-label="Delete prediction"
                                                     icon={<DeleteIcon />}
@@ -1178,8 +1177,6 @@ const Predictions = () => {
                                             </CardBody>
                                         </Card>
                                     </TabPanel>
-                                    // استبدل قسم Predictions TabPanel بالكود التالي:
-
                                     <TabPanel>
                                         <Card bg={cardBg}>
                                             <CardHeader>
@@ -1409,7 +1406,7 @@ const Predictions = () => {
                                                                         ...predictionChartData.options?.xaxis,
                                                                         categories: predictionChartData.options?.xaxis?.categories || [],
                                                                         title: {
-                                                                            text: 'الفترات المستقبلية',
+                                                                            text: 'القيم',
                                                                             style: {
                                                                                 color: useColorModeValue("#2D3748", "#E2E8F0"),
                                                                                 fontSize: '12px',

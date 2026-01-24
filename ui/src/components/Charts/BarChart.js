@@ -73,7 +73,7 @@ const BarChart = (props) => {
     xaxis: {
       categories: ["شهر 1", "شهر 2", "شهر 3", "شهر 4", "شهر 5", "شهر 6", "شهر 7", "شهر 8", "شهر 9"],
       title: { 
-        text: 'الفترات المستقبلية',
+        text: 'التاريخ',
         style: {
           color: chartTextColor,
           fontSize: '12px',

@@ -1,9 +1,9 @@
 <?php return array(
     'root' => array(
         'name' => 'laravel/laravel',
-        'pretty_version' => '1.0.0+no-version-set',
-        'version' => '1.0.0.0',
-        'reference' => null,
+        'pretty_version' => 'dev-main',
+        'version' => 'dev-main',
+        'reference' => '96abad93a0720dcc39471d55b1e0205fd875b865',
         'type' => 'project',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -380,9 +380,9 @@
             'dev_requirement' => false,
         ),
         'laravel/laravel' => array(
-            'pretty_version' => '1.0.0+no-version-set',
-            'version' => '1.0.0.0',
-            'reference' => null,
+            'pretty_version' => 'dev-main',
+            'version' => 'dev-main',
+            'reference' => '96abad93a0720dcc39471d55b1e0205fd875b865',
             'type' => 'project',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
@@ -1008,9 +1008,9 @@
             'dev_requirement' => true,
         ),
         'spomky-labs/otphp' => array(
-            'pretty_version' => '11.4.1',
-            'version' => '11.4.1.0',
-            'reference' => '126c99b6cbbc18992cf3fba3b87931ba4e312482',
+            'pretty_version' => '11.4.2',
+            'version' => '11.4.2.0',
+            'reference' => '2a1b503fd1c1a5c751ab3c5cd37f2d2d26ab74ad',
             'type' => 'library',
             'install_path' => __DIR__ . '/../spomky-labs/otphp',
             'aliases' => array(),
